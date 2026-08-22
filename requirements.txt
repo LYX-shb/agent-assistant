@@ -1,0 +1,23 @@
+# Web 框架
+fastapi
+uvicorn[standard]
+
+# LangChain 生态
+langchain
+langchain-community
+langchain-openai
+langchain-chroma
+langchain-text-splitters
+
+# 向量数据库
+chromadb
+
+# 文档解析（PyPDFLoader 依赖）
+pypdf
+
+# 前端
+gradio
+
+# 测试
+pytest
+httpx
