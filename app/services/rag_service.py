@@ -1,5 +1,6 @@
 """RAG 核心：加载知识库 → 切分 → 向量化 → 检索 → 生成带来源的答案"""
 import logging
+import re
 import shutil
 
 from langchain_chroma import Chroma
@@ -16,6 +17,7 @@ from app.core.config import (
     CHROMA_DIR,
     TOP_K,
 )
+from app.core.errors import ServiceUnavailableError
 from app.utils.document_loader import load_knowledge_dir
 
 logger = logging.getLogger("RAG")
@@ -32,6 +34,8 @@ class RAGService:
             base_url=BASE_URL,
             check_embedding_ctx_length=False,  # 关键：关闭长度/tokenize 预处理，DashScope 兼容接口要原始字符串
             chunk_size=25,  # DashScope text-embedding-v2 单次请求最多 25 条，超出需分批
+            request_timeout=30,
+            max_retries=0,
         )
         # 大语言模型：生成回答
         self.llm = ChatOpenAI(
@@ -39,6 +43,8 @@ class RAGService:
             api_key=ALIBABA_API_KEY,
             base_url=BASE_URL,
             temperature=0,
+            request_timeout=30,
+            max_retries=0,
         )
         self.vectorstore = None
 
@@ -65,7 +71,7 @@ class RAGService:
         if CHROMA_DIR.exists():
             shutil.rmtree(CHROMA_DIR)
         
-        # CSV 文档按整行处理，跳过切分，避免"课程名/学分/学期"等字段被 500 字符块截断
+        # CSV 每行已由 CSVLoader 作为一条原始文档返回，只切分 PDF 页面。
         csv_docs = []
         pdf_docs = []
         for doc in docs:
@@ -92,7 +98,6 @@ class RAGService:
             # 强制转字符串
             content = str(content)
             # 移除不可见控制字符
-            import re
             content = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', content)
             content = content.strip()
             if content:
@@ -134,11 +139,9 @@ class RAGService:
                 persist_directory=str(CHROMA_DIR),
             )
         except Exception as exc:
-            logger.warning("[RAG] from_documents 失败（%s），改用 from_texts 安全方式构建索引", exc)
-            # 先手动调用 embed_documents 验证 embedding 输入均为字符串
+            logger.warning("[RAG] from_documents 失败（%s），改用 from_texts 构建索引", type(exc).__name__)
             contents = [t.page_content for t in texts]
             metadatas = [t.metadata for t in texts]
-            self.embeddings.embed_documents(contents)
             return Chroma.from_texts(
                 texts=contents,
                 metadatas=metadatas,
@@ -169,7 +172,7 @@ class RAGService:
          # 确保 question 是纯字符串
         question = str(question) if question else ""
         if self.vectorstore is None:
-            return {"answer": "知识库尚未就绪，请检查 knowledge/ 目录是否有文件，并确认 API Key 有效。", "sources": []}
+            raise ServiceUnavailableError("知识库尚未就绪，请检查知识库文件和服务端启动日志。")
 
         # 构造检索 query：把最近一轮用户历史问题拼进来，让指代（如"这门课"）能命中完整语义
         search_query = question
@@ -183,7 +186,11 @@ class RAGService:
                 search_query = f"{last_user_q} {question}"
 
         # 1. 检索 Top-K（至少取 5 条提升召回率）
-        docs = self.vectorstore.similarity_search(search_query, k=max(TOP_K, 5))
+        try:
+            docs = self.vectorstore.similarity_search(search_query, k=max(TOP_K, 5))
+        except Exception as exc:
+            logger.warning("[RAG] 知识库检索失败: %s", type(exc).__name__)
+            raise ServiceUnavailableError("知识库检索暂时不可用，请稍后重试。") from exc
         if not docs:
             return {"answer": "没有在知识库中找到相关内容。", "sources": []}
 
@@ -202,7 +209,11 @@ class RAGService:
 
         # 3. 生成答案
         prompt = self._build_prompt(question, context, history_text)
-        answer = str(self.llm.invoke(prompt).content).strip()
+        try:
+            answer = str(self.llm.invoke(prompt).content).strip()
+        except Exception as exc:
+            logger.warning("[RAG] 模型生成失败: %s", type(exc).__name__)
+            raise ServiceUnavailableError("模型服务暂时不可用，请检查 API Key、额度和网络后重试。") from exc
 
         logger.info("[RAG] 已生成回答，引用 %d 个来源", len(sources))
         return {"answer": answer, "sources": sources}
@@ -219,7 +230,11 @@ class RAGService:
 {question}
 
 请回答："""
-        return str(self.llm.invoke(prompt).content).strip()
+        try:
+            return str(self.llm.invoke(prompt).content).strip()
+        except Exception as exc:
+            logger.warning("[RAG] 普通对话生成失败: %s", type(exc).__name__)
+            raise ServiceUnavailableError("模型服务暂时不可用，请检查 API Key、额度和网络后重试。") from exc
 
     def _format_history(self, history):
         """把历史消息列表转成纯文本"""

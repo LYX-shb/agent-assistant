@@ -17,6 +17,7 @@ pypdf
 
 # 前端
 gradio
+requests
 
 # 测试
 pytest

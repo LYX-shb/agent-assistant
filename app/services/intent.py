@@ -4,6 +4,7 @@ import logging
 from langchain_openai import ChatOpenAI
 
 from app.core.config import BASE_URL, LLM_MODEL, ALIBABA_API_KEY
+from app.core.errors import ServiceUnavailableError
 
 logger = logging.getLogger("Intent")
 
@@ -32,18 +33,20 @@ def _build_llm():
         api_key=ALIBABA_API_KEY,
         base_url=BASE_URL,
         temperature=0,  # 意图识别要稳定，温度设为 0
+        request_timeout=30,
+        max_retries=0,
     )
 
 
 def detect_intent(question):
-    """返回三个意图之一；识别失败时回退为“其他”"""
-    llm = _build_llm()
-    prompt = INTENT_PROMPT.format(question=question)
+    """返回三个意图之一；上游服务失败时向 API 层报告错误。"""
     try:
+        llm = _build_llm()
+        prompt = INTENT_PROMPT.format(question=question)
         raw = str(llm.invoke(prompt).content).strip()
     except Exception as e:
-        logger.warning("[Intent] 意图识别失败，回退为“其他”: %s", e)
-        return INTENT_OTHER
+        logger.warning("[Intent] 意图识别失败: %s", type(e).__name__)
+        raise ServiceUnavailableError("意图识别服务暂时不可用，请稍后重试。") from e
 
     # 归一化：从返回文本中匹配关键词，避免多余符号干扰
     if INTENT_ANALYSIS in raw:

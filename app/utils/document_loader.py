@@ -1,4 +1,4 @@
-"""多格式文档加载：PDF 按段落切分，CSV 按行加载"""
+"""加载知识库原始文档；PDF 切分由 RAG 服务统一完成，CSV 保持每行一条。"""
 import logging
 from pathlib import Path
 
@@ -54,7 +54,7 @@ def split_documents(docs, chunk_size=500, chunk_overlap=50):
 
 
 def load_knowledge_dir(knowledge_dir):
-    """加载知识库目录下所有 PDF 与 CSV，返回切分后的文档列表"""
+    """加载目录下的 PDF 页面和 CSV 行，不在此处切分，保留来源元数据。"""
     all_docs = []
     for pdf in sorted(Path(knowledge_dir).glob("*.pdf")):
         logger.info("[Loader] 加载 PDF: %s", pdf.name)
@@ -63,6 +63,5 @@ def load_knowledge_dir(knowledge_dir):
         logger.info("[Loader] 加载 CSV: %s", csv.name)
         all_docs.extend(load_csv(csv))
 
-    chunks = split_documents(all_docs)
-    logger.info("[Loader] 共切分为 %d 个文本块", len(chunks))
-    return chunks
+    logger.info("[Loader] 共加载 %d 条原始文档记录", len(all_docs))
+    return all_docs

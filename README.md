@@ -1,128 +1,121 @@
-# 智能学业咨询 Agent（基于 RAG）
+# 基于 RAG 的学业咨询助手
 
-一个基于 RAG（检索增强生成）的智能学业咨询助手。用通义千问 + ChromaDB 实现：
-把 PDF / CSV 知识库向量化，用户提问时先检索相关内容，再让 LLM 结合资料回答，并标注引用来源。
+一个本地运行的 RAG Demo：从 PDF 页面和 CSV 行加载知识，使用 Chroma 检索相关内容，再调用 DashScope 兼容的通义千问模型生成回答。Gradio 页面会分开展示回答和后端返回的来源信息。
+
+项目不包含用户认证，Gradio 会话 ID 只用于隔离演示期间的对话历史。数据统计、可靠引用校验和生产部署不在当前 Demo 能力范围内。
 
 ## 功能
 
-1. **RAG 问答**：PDF 按段落切分、CSV 按行加载，存入 ChromaDB，检索 Top-3 相关内容回答。
-2. **引用溯源**：回答标注来源（PDF 显示页码 / CSV 显示文件名），前端单独展示来源列表。
-3. **意图识别**：LLM 判断问题属于「学业咨询 / 数据分析 / 其他」，据此路由到 RAG 或普通对话。
-4. **多轮记忆**：SQLite 保存最近 3 轮对话，追问时自动带上上下文。
-5. **Gradio 前端**：输入框 + 对话展示 + 来源展示。
-6. **pytest 测试**：健康检查、单轮问答、多轮记忆 3 个用例（测试不联网、不消耗 API）。
+- 加载 PDF 和 CSV：PDF 页面按中文友好分隔符切分；CSV 每行保持为独立文档。
+- RAG 问答：Chroma 向量检索最多返回 5 条文本块，模型按上下文生成回答。
+- 来源展示：后端返回来源文件名和 PDF 页码，Gradio 前端展示来源列表。来源列表说明检索依据，不代表程序已验证模型回答中的每个引用编号。
+- 问题路由：LLM 将问题分为学业咨询、数据分析或其他；前两类走知识库检索，其他问题走普通模型对话。数据分析路由当前仍基于检索片段，不会对完整 CSV 执行统计聚合。
+- 会话记忆：SQLite 按 session_id 保存对话，向模型提供最近 3 轮历史。直接调用 API 的客户端应在同一对话的多次请求中复用响应返回的 session_id。
+- 自动化测试：`tests/test_chat.py` 使用替身模型和检索逻辑，不联网、不消耗 API 费用。
 
 ## 技术栈
 
-Python · FastAPI · LangChain · ChromaDB · 通义千问 API（DashScope）· SQLite · Gradio · pytest
+Python、FastAPI、Pydantic、LangChain、Chroma、DashScope 兼容 API、SQLite、Gradio、pytest
 
 ## 目录结构
 
-```
-agent-assistant/
-├── app/
-│   ├── main.py              # FastAPI 入口，注册路由
-│   ├── api/chat.py          # /api/chat 接口 + Pydantic 模型
-│   ├── core/config.py       # 阿里云 API Key 配置
-│   ├── core/memory.py       # SQLite 多轮对话记忆
-│   ├── services/rag_service.py  # RAG 核心：加载→切分→向量化→检索
-│   ├── services/intent.py   # 意图识别
-│   └── utils/document_loader.py # 多格式加载（PyPDFLoader + CSVLoader）
-├── knowledge/               # 知识库（放你的 PDF / CSV）
-│   ├── sample.pdf
-│   └── sample.csv
-├── frontend/app.py          # Gradio 交互界面
-├── tests/test_chat.py       # pytest 测试
-├── conftest.py              # pytest 路径配置
-├── requirements.txt
-└── README.md
+```text
+app/
+  main.py                     FastAPI 应用与启动索引
+  api/chat.py                 聊天接口与请求/响应模型
+  core/config.py              配置与路径
+  core/errors.py              上游服务错误
+  core/memory.py              SQLite 对话历史
+  services/intent.py          问题意图识别
+  services/rag_service.py     文档切分、向量索引、检索和生成
+  utils/document_loader.py    PDF/CSV 加载
+frontend/app.py               Gradio 页面
+knowledge/                    放置 PDF 和 CSV
+tests/test_chat.py            离线 API 用例
+requirements.txt
 ```
 
-## 环境要求
+## 环境
 
-- Python 3.10 ～ 3.12（chromadb 对 Python 3.13 支持尚不稳定，建议用 3.10/3.11）
+建议使用 Python 3.10–3.12。首次建立向量索引需要能够访问 DashScope API，并配置有效的 `ALIBABA_API_KEY`。
 
 ## 安装
 
-```bash
-# 1. 进入项目目录
-cd agent-assistant
+在项目根目录创建虚拟环境并安装依赖：
 
-# 2. 创建并激活虚拟环境（推荐）
+```powershell
 python -m venv .venv
-# Windows（Git Bash / CMD / PowerShell）：
-source .venv/Scripts/activate      # Git Bash
-# 或 .venv\Scripts\activate.bat    # CMD
-# 或 .venv\Scripts\Activate.ps1    # PowerShell
-
-# 3. 安装依赖
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-> 首次安装 chromadb 等包可能较慢，耐心等待即可。
+如果 PowerShell 禁止激活脚本，也可以直接使用虚拟环境中的 Python：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
 
 ## 配置 API Key
 
-`app/core/config.py` 里已内置了默认 Key，**开箱即用**。但建议改用环境变量，避免泄露：
+项目不会在源码中内置 API Key。请在当前 PowerShell 窗口设置环境变量：
 
-```bash
-# Windows Git Bash
-export ALIBABA_API_KEY="sk-xxx你的key"
-
-# 或 Windows PowerShell
-$env:ALIBABA_API_KEY = "sk-xxx你的key"
+```powershell
+$env:ALIBABA_API_KEY = "你的 DashScope API Key"
 ```
 
-> ⚠️ 安全提醒：你提供的 Key 已经出现在聊天记录里，请尽快去
-> [阿里云百炼控制台](https://bailian.console.aliyun.com/) 轮换（重新生成）一个，并改用环境变量方式注入。
+不要将真实 Key 提交到 Git、截图或公开日志。如果 Key 曾经泄露，请在对应服务控制台撤销并重新生成。
 
 ## 准备知识库
 
-- `knowledge/sample.csv` 已提供示例课程数据（中文，可直接用）。
-- `knowledge/sample.pdf` 是英文占位文件，**请替换为你自己的中文 PDF**（例如培养方案、选课指南）。
-  - 想要中文 PDF 也简单：用 Word/WPS 写好内容后「另存为 PDF」，放到 `knowledge/` 目录即可。
-- 任何新增的 `.pdf` / `.csv` 放到 `knowledge/` 后，**删除 `chroma_db/` 目录再重启后端**即可重建索引。
+- `knowledge/sample.csv` 是示例课程表，CSV 每一行会单独建立向量记录。
+- `knowledge/sample.pdf` 是示例文件。实际演示前请替换为有权使用的资料，并确认 PDF 可提取文本。
+- 增删改知识文件后，需要重建向量索引。关闭后端，删除项目根目录下的 `chroma_db/`，再重新启动后端。
+- SQLite 历史保存在 `chat_memory.db`。演示前若需清除对话记录，先关闭后端再删除该文件。
 
 ## 启动
 
-先启动后端（FastAPI），再启动前端（Gradio）。**两个终端窗口分别运行**：
+先在第一个终端启动 FastAPI：
 
-```bash
-# 终端 1：启动后端
-cd agent-assistant
+```powershell
 uvicorn app.main:app --reload --port 8000
 ```
 
-看到 `[App] 正在启动...`、`[RAG] 向量索引构建完成` 即成功。
+首次启动会尝试创建向量索引，过程需要 DashScope API。索引构建失败时进程仍会启动，但知识库问答会返回 HTTP 503；请检查后端日志、资料目录和 API 配置。`/api/health` 仅表示 API 进程可响应，不代表知识库已经就绪。
 
-```bash
-# 终端 2：启动前端
-cd agent-assistant
+再在第二个终端启动 Gradio（API Key 只需配置在运行 FastAPI 的终端）：
+
+```powershell
 python frontend/app.py
 ```
 
-打开浏览器访问 Gradio 给出的地址（默认 `http://127.0.0.1:7860`），即可提问。
+打开 Gradio 输出的本地地址。FastAPI 接口文档位于 `http://127.0.0.1:8000/docs`。
 
-后端接口文档：`http://127.0.0.1:8000/docs`
+## API 示例
 
-## 运行测试
+```json
+{
+  "session_id": "client-generated-session-id",
+  "message": "高等数学多少学分？"
+}
+```
 
-```bash
-cd agent-assistant
+首次请求也可以省略 `session_id`，服务会生成并在响应中返回。客户端若要保持多轮历史，之后的请求应复用该 ID。不同对话必须使用不同 ID。这个字段本身不是登录凭证或身份认证。
+
+模型、向量化服务、知识库索引不可用时，`POST /api/chat` 返回 HTTP 503 和面向用户的错误说明；服务端日志只记录异常类型，不记录提供商的完整异常文本。
+
+## 运行离线测试
+
+```powershell
 pytest -v
 ```
 
-应看到 3 个用例全部通过：
-
-```
-test_health_check        PASSED
-test_single_round_chat   PASSED
-test_multi_round_memory  PASSED
-```
+测试会替换 LLM 与向量检索调用，因此不验证真实 API Key、DashScope 额度、真实向量索引或在线模型质量。
 
 ## 常见问题
 
-- **启动时报 `知识库索引构建失败`**：检查 `knowledge/` 是否有文件、网络是否可用、API Key 是否有效。
-- **改了知识库但答案没变**：删除 `chroma_db/` 目录后重启后端，强制重建索引。
-- **问答说“知识库尚未就绪”**：说明索引没建成功，看后端日志里的报错原因。
-- **数据分析类问题**：当前通过检索 Top-3 条 CSV 行交给 LLM 分析，适合小数据集演示；数据量大时需另行聚合。
+- **知识库问答返回 503**：检查后端启动日志、`knowledge/` 文件、API Key、网络和 DashScope 额度。若更新过文件，删除旧 `chroma_db/` 后重建。
+- **模型请求超时或被限流**：页面会显示服务暂不可用；检查网络及供应商控制台状态与用量，再重试。
+- **API 直接调用时多轮上下文丢失**：客户端需要在连续请求中复用响应里的 `session_id`。
+- **回答显示来源，但引用编号不正确**：目前展示的是检索来源列表，尚未自动核验模型生成的引用编号与内容是否一致。
+- **统计类问题结果不可靠**：当前数据分析意图仍将检索片段交给模型；需要准确统计时应使用 SQL 或 Python 对完整数据聚合。

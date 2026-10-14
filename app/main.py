@@ -20,12 +20,12 @@ async def lifespan(app: FastAPI):
         rag_service.load_or_build()
     except Exception as e:
         # 索引构建失败不阻断启动，聊天时会返回友好提示
-        logger.error("[App] 知识库索引构建失败: %s", e)
+        logger.error("[App] 知识库索引构建失败: %s", type(e).__name__)
     yield
     logger.info("[App] 正在关闭...")
 
 
-app = FastAPI(title="智能学业咨询 Agent", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="基于 RAG 的学业咨询助手", version="1.0.0", lifespan=lifespan)
 
 # 注册聊天路由
 app.include_router(chat_router)
